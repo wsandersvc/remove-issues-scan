@@ -20,12 +20,12 @@ debug_log() { [ "$DEBUG_MODE" = true ] && echo "[DEBUG] $*" >&2; }
 
 print_usage() {
     cat << 'EOF'
-Usage: $0 <vid> <vkey> <appname> [options]
+Usage: $0 <VERACODE_API_KEY_ID> <VERACODE_API_KEY_SECRET> <APP_NAME> [options]
 
 Required:
-  vid                    Veracode API ID (or use VERACODE_API_KEY_ID env var)
-  vkey                   Veracode API Key (or use VERACODE_API_KEY_SECRET env var)
-  appname                Veracode application name or GUID
+  VERACODE_API_KEY_ID                    Veracode API ID (or use VERACODE_API_KEY_ID env var)
+  VERACODE_API_KEY_SECRET                Veracode API Key (or use VERACODE_API_KEY_SECRET env var)
+  APP_NAME                               Veracode application name or GUID
 
 Options:
   --filter <type>        Filter type (default: all_results)
@@ -46,10 +46,10 @@ Filters:
 
 Examples:
   # Fetch from API and filter
-  ./filter_policy_findings_v2.sh "$VID" "$VKEY" "MyApp" --filter unmitigated_results --output-file out.json
+  ./filter_policy_findings_v2.sh "$VERACODE_API_KEY_ID" "$VERACODE_API_KEY_SECRET" "MyApp" --filter unmitigated_results --output-file out.json
 
   # Use local file
-  ./filter_policy_findings_v2.sh "$VID" "$VKEY" "MyApp" --input-file policy_flaws.json --output-file filtered.json
+  ./filter_policy_findings_v2.sh "$VERACODE_API_KEY_ID" "$VERACODE_API_KEY_SECRET" "MyApp" --input-file policy_flaws.json --output-file filtered.json
 EOF
 }
 
@@ -67,8 +67,8 @@ print_results() {
 [ $# -eq 0 ] && { print_usage; exit 1; }
 
 # Required args (support env vars as fallback)
-VID="${1:-${VERACODE_API_KEY_ID}}"
-VKEY="${2:-${VERACODE_API_KEY_SECRET}}"
+export VERACODE_API_KEY_ID="${1:-${VERACODE_API_KEY_ID}}"
+export VERACODE_API_KEY_SECRET="${2:-${VERACODE_API_KEY_SECRET}}"
 APP_NAME="${3}"
 shift 3 2>/dev/null || true
 
@@ -89,8 +89,8 @@ while [ $# -gt 0 ]; do
 done
 
 # Validate required args
-[ -z "$VID" ] || [ -z "$VKEY" ] || [ -z "$APP_NAME" ] && {
-    echo "Error: vid, vkey, and appname are required"
+[ -z "$VERACODE_API_KEY_ID" ] || [ -z "$VERACODE_API_KEY_SECRET" ] || [ -z "$APP_NAME" ] && {
+    echo "Error: VERACODE_API_KEY_ID, VERACODE_API_KEY_SECRET, and APP_NAME are required"
     print_usage
     exit 1
 }
@@ -122,7 +122,7 @@ echo "  Fail on policy: $FAIL_ON_POLICY"
 echo "  Debug mode: $DEBUG_MODE"
 echo "############################################"
 echo ""
-debug_log "VID (masked): ${VID:0:8}..."
+debug_log "VERACODE_API_KEY_ID (masked): ${VERACODE_API_KEY_ID:0:8}..."
 
 ###############################################################################
 # SETUP TEMP DIR
