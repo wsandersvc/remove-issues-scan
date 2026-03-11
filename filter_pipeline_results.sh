@@ -89,8 +89,8 @@ if [ $# -eq 0 ]; then
 fi
 
 # Required arguments
-VID="${1}"
-VKEY="${2}"
+export VERACODE_API_KEY_ID="${1:-${VERACODE_API_KEY_ID}}"
+export VERACODE_API_KEY_SECRET="${2:-${VERACODE_API_KEY_SECRET}}"
 APP_NAME="${3}"
 
 # Shift past the first 3 required arguments
@@ -139,7 +139,7 @@ while [ $# -gt 0 ]; do
 done
 
 # Validate required arguments
-if [ -z "$VID" ] || [ -z "$VKEY" ] || [ -z "$APP_NAME" ]; then
+if [ -z "$VERACODE_API_KEY_ID" ] || [ -z "$VERACODE_API_KEY_SECRET" ] || [ -z "$APP_NAME" ]; then
     echo "Error: vid, vkey, and appname are required"
     print_usage
     exit 1
@@ -172,7 +172,7 @@ echo "  Debug mode: $DEBUG_MODE"
 echo "############################################"
 echo ""
 
-debug_log "VID (masked): ${VID:0:8}..."
+debug_log "VERACODE_API_KEY_ID (masked): ${VERACODE_API_KEY_ID:0:8}..."
 debug_log "Input file size: $(wc -c < "$INPUT_FILE" | tr -d ' ') bytes"
 
 #############################################
