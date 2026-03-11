@@ -16,7 +16,11 @@ FILTER_TYPE=$DEFAULT_FILTER
 ###############################################################################
 # HELPER FUNCTIONS
 ###############################################################################
-debug_log() { [ "$DEBUG_MODE" = true ] && echo "[DEBUG] $*" >&2; }
+debug_log() { 
+    if [ "$DEBUG_MODE" = true ]; then
+        echo "[DEBUG] $*" >&2
+    fi
+}
 
 print_usage() {
     cat << 'EOF'
