@@ -1,5 +1,7 @@
 #!/bin/bash
 
+# TODO: Not working for all cases.
+
 # Enhanced Pipeline Results Filter Script
 # Mimics the behavior of pipeline-results-service.ts
 #
@@ -39,25 +41,25 @@ print_usage() {
 Usage: $0 <vid> <vkey> <appname> [options]
 
 Required arguments:
-  vid                         Veracode API ID
-  vkey                        Veracode API Key
-  appname                     Veracode application name
+  vid                              Veracode API ID
+  vkey                             Veracode API Key
+  appname                          Veracode application name
 
 Optional arguments:
-  --line-number-slop <n>              Line number slop for matching (default: 3)
-  --filter <type>                     Filter type (default: "all_results")
-  --input-file <file>                 Input pipeline results file (default: "results.json")
-  --output-file <file>                Output file (default: overwrites input file)
-  --fail-on-policy                    Exit with error code if policy violations found
-  --debug                             Enable debug logging
+  --line-number-slop <n>           Line number slop for matching (default: 3)
+  --filter <type>                  Filter type (default: "all_results")
+  --input-file <file>              Input pipeline results file (default: "results.json")
+  --output-file <file>             Output file (default: overwrites input file)
+  --fail-on-policy                 Exit with error code if policy violations found
+  --debug                          Enable debug logging
 
 Available filter options:
-  - all_results:                   Includes all pipeline scan findings
-  - policy_violations:             Includes only findings that violate the security policy
-  - unmitigated_results:           Excludes mitigated findings
-  - unmitigated_policy_violations: Includes only unmitigated findings that violate policy
-  - new_findings:                  Includes net new findings introduced in this commit
-  - new_policy_violations:         Includes net new findings that violate the security policy
+  all_results                      All findings
+  policy_violations                Only policy violating findings
+  unmitigated_results              Exclude mitigated findings
+  unmitigated_policy_violations    Unmitigated policy violations only
+  new_findings                     New findings only
+  new_policy_violations            New policy violations only
 
 Examples:
   $0 "\$VID" "\$VKEY" "MyApp" --filter unmitigated_results --input-file results.json
@@ -67,15 +69,11 @@ Examples:
 EOF
 }
 
-print_results() {
-    local pipeline_findings=$1
-    local mitigated_findings=$2
-    local remaining_findings=$3
-    
+print_results() {    
     echo "=============================================="
-    echo "Pipeline findings: ${pipeline_findings}"
-    echo "Mitigated findings: ${mitigated_findings}"
-    echo "Filtered pipeline findings: ${remaining_findings}"
+    echo "Pipeline findings: $1"
+    echo "Mitigated findings: $2"
+    echo "Filtered pipeline findings: $3"
     echo "=============================================="
 }
 
@@ -102,39 +100,14 @@ OUTPUT_FILE=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --line-number-slop)
-            LINE_NUMBER_SLOP="$2"
-            shift 2
-            ;;
-        --filter)
-            FILTER_TYPE="$2"
-            shift 2
-            ;;
-        --input-file)
-            INPUT_FILE="$2"
-            shift 2
-            ;;
-        --output-file)
-            OUTPUT_FILE="$2"
-            shift 2
-            ;;
-        --fail-on-policy)
-            FAIL_ON_POLICY=true
-            shift
-            ;;
-        --debug)
-            DEBUG_MODE=true
-            shift
-            ;;
-        --help|-h)
-            print_usage
-            exit 0
-            ;;
-        *)
-            echo "Unknown argument: $1"
-            print_usage
-            exit 1
-            ;;
+        --line-number-slop) LINE_NUMBER_SLOP="$2"; shift 2 ;;
+        --filter) FILTER_TYPE="$2"; shift 2 ;;
+        --input-file) INPUT_FILE="$2"; shift 2 ;;
+        --output-file) OUTPUT_FILE="$2"; shift 2 ;;
+        --fail-on-policy) FAIL_ON_POLICY=true; shift ;;
+        --debug) DEBUG_MODE=true; shift ;;
+        --help|-h) print_usage; exit 0 ;;
+        *) echo "Unknown argument: $1"; print_usage; exit 1 ;;
     esac
 done
 

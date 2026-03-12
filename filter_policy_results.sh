@@ -1,59 +1,67 @@
 #!/bin/bash
-# Filter Veracode Policy Findings
-# Fetches findings from API (with pagination) or uses local file, then applies filters
-# Dependencies: httpie (with veracode_hmac), jq
+
+# Enhanced Policy Results Filter Script
+#
+# This script filters Veracode Policy Scan results
+#
+# Dependencies: httpie, jq, curl
+# Best suited for veracode/api-signing container or systems with httpie installed
 
 set -e
 
-###############################################################################
-# DEFAULTS
-###############################################################################
+#############################################
+# Configuration and Defaults
+#############################################
+
 DEFAULT_FILTER="all_results"
 DEBUG_MODE=false
 FAIL_ON_POLICY=false
+
 FILTER_TYPE=$DEFAULT_FILTER
 
-###############################################################################
-# HELPER FUNCTIONS
-###############################################################################
-debug_log() { 
+#############################################
+# Helper Functions
+#############################################
+
+debug_log() {
     if [ "$DEBUG_MODE" = true ]; then
         echo "[DEBUG] $*" >&2
     fi
 }
 
 print_usage() {
-    cat << 'EOF'
-Usage: $0 <VERACODE_API_KEY_ID> <VERACODE_API_KEY_SECRET> <APP_NAME> [options]
+    cat << EOF
+Usage: $0 <vid> <vkey> <appname> [options]
 
-Required:
-  VERACODE_API_KEY_ID                    Veracode API ID (or use VERACODE_API_KEY_ID env var)
-  VERACODE_API_KEY_SECRET                Veracode API Key (or use VERACODE_API_KEY_SECRET env var)
-  APP_NAME                               Veracode application name or GUID
+Required arguments:
+  vid                              Veracode API ID
+  vkey                             Veracode API Key
+  appname                          Veracode application name
+  --output-file <file>             Output file name
 
-Options:
-  --filter <type>        Filter type (default: all_results)
-  --input-file <file>    Use local file instead of fetching from API
-  --output-file <file>   Output file path (required)
-  --fail-on-policy       Exit with code 1 if policy violations found
-  --debug                Enable debug logging
+Optional arguments:
+  --filter <type>                  Filter type (default: "all_results")
+  --input-file <file>              Input policy results file (default: fetch from API)
+  --fail-on-policy                 Exit with error code if policy violations found
+  --debug                          Enable debug logging
 
-Filters:
-  all_results                   All findings
-  policy_violations             Only policy violating findings
-  unmitigated_results           Exclude mitigated findings
-  unmitigated_policy_violations Unmitigated policy violations only
-  new_findings                  New findings only
-  new_policy_violations         New policy violations only
-  open_findings                 Open findings only
-  closed_findings               Closed findings only
+Available filter options:
+  all_results                      All findings
+  policy_violations                Only policy violating findings
+  unmitigated_results              Exclude mitigated findings
+  unmitigated_policy_violations    Unmitigated policy violations only
+  new_findings                     New findings only
+  new_policy_violations            New policy violations only
+  open_findings                    Open findings only
+  closed_findings                  Closed findings only
 
 Examples:
   # Fetch from API and filter
-  ./filter_policy_findings_v2.sh "$VERACODE_API_KEY_ID" "$VERACODE_API_KEY_SECRET" "MyApp" --filter unmitigated_results --output-file out.json
+  $0 "\$VID" "\$VKEY" "MyApp" --filter unmitigated_results --output-file out.json
 
   # Use local file
-  ./filter_policy_findings_v2.sh "$VERACODE_API_KEY_ID" "$VERACODE_API_KEY_SECRET" "MyApp" --input-file policy_flaws.json --output-file filtered.json
+  $0 "\$VERACODE_API_KEY_ID" "\$VERACODE_API_KEY_SECRET" "MyApp" --input-file policy_flaws.json --output-file filtered.json
+
 EOF
 }
 
@@ -65,18 +73,24 @@ print_results() {
     echo "=============================================="
 }
 
-###############################################################################
-# PARSE ARGUMENTS
-###############################################################################
-[ $# -eq 0 ] && { print_usage; exit 1; }
+#############################################
+# Parse Command Line Arguments
+#############################################
 
-# Required args (support env vars as fallback)
+if [ $# -eq 0 ]; then
+    print_usage
+    exit 1
+fi
+
+# Required arguments
 export VERACODE_API_KEY_ID="${1:-${VERACODE_API_KEY_ID}}"
 export VERACODE_API_KEY_SECRET="${2:-${VERACODE_API_KEY_SECRET}}"
 APP_NAME="${3}"
+
+# Shift past the first 3 required arguments
 shift 3 2>/dev/null || true
 
-# Optional args
+# Parse optional arguments
 INPUT_FILE=""
 OUTPUT_FILE=""
 
@@ -92,30 +106,31 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-# Validate required args
-[ -z "$VERACODE_API_KEY_ID" ] || [ -z "$VERACODE_API_KEY_SECRET" ] || [ -z "$APP_NAME" ] && {
-    echo "Error: VERACODE_API_KEY_ID, VERACODE_API_KEY_SECRET, and APP_NAME are required"
+# Validate required arguments
+if [ -z "$VERACODE_API_KEY_ID" ] || [ -z "$VERACODE_API_KEY_SECRET" ] || [ -z "$APP_NAME" ]; then
+    echo "Error: vid, vkey, and appname are required"
     print_usage
     exit 1
-}
+fi
 
 # Validate file args
-[ -n "$INPUT_FILE" ] && [ -z "$OUTPUT_FILE" ] && {
+if [ -n "$INPUT_FILE" ] && [ -z "$OUTPUT_FILE" ]; then
     echo "Error: --output-file required when --input-file provided"
     exit 1
-}
-[ -z "$INPUT_FILE" ] && [ -z "$OUTPUT_FILE" ] && {
+fi
+if [ -z "$INPUT_FILE" ] && [ -z "$OUTPUT_FILE" ]; then
     echo "Error: --output-file required when fetching from API"
     exit 1
-}
-[ -n "$INPUT_FILE" ] && [ ! -f "$INPUT_FILE" ] && {
+fi
+if [ -n "$INPUT_FILE" ] && [ ! -f "$INPUT_FILE" ]; then
     echo "Error: Input file '$INPUT_FILE' not found"
     exit 1
-}
+fi
 
 ###############################################################################
-# DISPLAY CONFIG
+# Display Configuration
 ###############################################################################
+
 echo "############################################"
 echo "Configuration:"
 echo "  Application: $APP_NAME"
@@ -126,17 +141,20 @@ echo "  Fail on policy: $FAIL_ON_POLICY"
 echo "  Debug mode: $DEBUG_MODE"
 echo "############################################"
 echo ""
+
 debug_log "VERACODE_API_KEY_ID (masked): ${VERACODE_API_KEY_ID:0:8}..."
 
 ###############################################################################
-# SETUP TEMP DIR
+# Setup TEMP Directory
 ###############################################################################
+
 TEMP_DIR=$(mktemp -d)
 trap "rm -rf $TEMP_DIR" EXIT
 
 ###############################################################################
-# FETCH OR READ FINDINGS
+# Fetch or Read Policy Findings
 ###############################################################################
+
 FINDINGS_FILE=""
 
 if [ -n "$INPUT_FILE" ]; then
@@ -147,26 +165,20 @@ else
     # Fetch from API
     echo "Fetching findings from Veracode API..."
     
-    # Check if APP_NAME is already a GUID (UUID format)
-    if [[ "$APP_NAME" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
-        GUID="$APP_NAME"
-        echo "Using application GUID: ${GUID}"
-    else
-        # Fetch GUID by application name
-        debug_log "Fetching application GUID for: $APP_NAME"
-        APP_RESPONSE="$TEMP_DIR/app.json"
-        
-        http --auth-type veracode_hmac GET \
-            "https://api.veracode.com/appsec/v1/applications?name=$(printf %s "$APP_NAME" | jq -sRr @uri)" \
-            > "$APP_RESPONSE" 2>/dev/null || {
-            echo "Error: Failed to fetch application"
-            exit 1
-        }
-        
-        GUID=$(jq -r '._embedded.applications[0].guid // empty' "$APP_RESPONSE")
-        [ -z "$GUID" ] && { echo "Error: Application '$APP_NAME' not found"; exit 1; }
-        echo "Application GUID: ${GUID}"
-    fi
+    # Fetch GUID by application name
+    debug_log "Fetching application GUID for: $APP_NAME"
+    APP_RESPONSE="$TEMP_DIR/app.json"
+    
+    http --auth-type veracode_hmac GET \
+        "https://api.veracode.com/appsec/v1/applications?name=$(printf %s "$APP_NAME" | jq -sRr @uri)" \
+        > "$APP_RESPONSE" 2>/dev/null || {
+        echo "Error: Failed to fetch application"
+        exit 1
+    }
+    
+    GUID=$(jq -r '._embedded.applications[0].guid // empty' "$APP_RESPONSE")
+    [ -z "$GUID" ] && { echo "Error: Application '$APP_NAME' not found"; exit 1; }
+    echo "Application GUID: ${GUID}"
     
     # Fetch findings with pagination
     FINDINGS_FILE="$TEMP_DIR/findings.json"
@@ -187,7 +199,7 @@ else
     
     # Fetch remaining pages
     if [ "$TOTAL_PAGES" -gt 1 ]; then
-        for ((PAGE=1; PAGE<TOTAL_PAGES; PAGE++)); do
+        for PAGE in $(seq 1 $((TOTAL_PAGES-1))); do
             echo "Fetching page $((PAGE+1)) of ${TOTAL_PAGES}..."
             http --auth-type veracode_hmac GET \
                 "https://api.veracode.com/appsec/v2/applications/${GUID}/findings?scan_type=STATIC&page=${PAGE}" \
@@ -210,13 +222,14 @@ else
 fi
 
 ###############################################################################
-# COUNT TOTAL FINDINGS
+# Count Total Findings
 ###############################################################################
+
 TOTAL_FINDINGS=$(jq '._embedded.findings | length' "$FINDINGS_FILE" 2>/dev/null || echo "0")
-[ -z "$TOTAL_FINDINGS" ] || [ "$TOTAL_FINDINGS" = "null" ] && {
+if [ -z "$TOTAL_FINDINGS" ] || [ "$TOTAL_FINDINGS" = "null" ]; then
     echo "Error: Could not parse findings file"
     exit 1
-}
+fi
 echo "Total findings in input: ${TOTAL_FINDINGS}"
 
 # Debug: Show sample findings
@@ -228,8 +241,9 @@ if [ "$DEBUG_MODE" = true ] && [ "$TOTAL_FINDINGS" -gt 0 ]; then
 fi
 
 ###############################################################################
-# APPLY FILTER
+# Apply Filter
 ###############################################################################
+
 debug_log "Applying filter: $FILTER_TYPE"
 FILTERED_FILE="$TEMP_DIR/filtered.json"
 
@@ -312,8 +326,9 @@ case "$FILTER_TYPE" in
 esac
 
 ###############################################################################
-# COUNT AND WRITE RESULTS
+# Count and Write Results
 ###############################################################################
+
 FILTERED_COUNT=$(jq '._embedded.findings | length' "$FILTERED_FILE" 2>/dev/null || echo "0")
 REMOVED_COUNT=$((TOTAL_FINDINGS - FILTERED_COUNT))
 
@@ -326,8 +341,9 @@ echo "Results written to $OUTPUT_FILE"
 print_results "$TOTAL_FINDINGS" "$FILTERED_COUNT" "$REMOVED_COUNT"
 
 ###############################################################################
-# EXIT BASED ON RESULTS
+# Exit Based on Results
 ###############################################################################
+
 # Check if any filtered findings violate policy
 HAS_POLICY_VIOLATIONS=false
 if [ "$FILTERED_COUNT" -gt 0 ]; then
@@ -344,5 +360,7 @@ if [ "$HAS_POLICY_VIOLATIONS" = true ] && [ "$FAIL_ON_POLICY" = true ]; then
     exit 1
 fi
 
-[ "$FILTERED_COUNT" -eq 0 ] && echo "No findings after filtering."
+if [ "$FILTERED_COUNT" -eq 0 ]; then
+    echo "No findings after filtering."
+fi
 exit 0
