@@ -31,11 +31,9 @@ debug_log() {
 
 print_usage() {
     cat << EOF
-Usage: $0 <vid> <vkey> <appname> [options]
+Usage: $0 <appname> [options]
 
 Required arguments:
-  vid                              Veracode API ID
-  vkey                             Veracode API Key
   appname                          Veracode application name
   --output-file <file>             Output file name
 
@@ -57,10 +55,14 @@ Available filter options:
 
 Examples:
   # Fetch from API and filter
-  $0 "\$VID" "\$VKEY" "MyApp" --filter unmitigated_results --output-file out.json
+  $0 "MyApp" --filter unmitigated_results --output-file out.json
 
   # Use local file
-  $0 "\$VERACODE_API_KEY_ID" "\$VERACODE_API_KEY_SECRET" "MyApp" --input-file policy_flaws.json --output-file filtered.json
+  $0 "MyApp" --input-file policy_flaws.json --output-file filtered.json
+
+Environment Variables:
+  VERACODE_API_KEY_ID              <vid>
+  VERACODE_API_KEY_SECRET          <vkey>
 
 EOF
 }
@@ -82,13 +84,8 @@ if [ $# -eq 0 ]; then
     exit 1
 fi
 
-# Required arguments
-export VERACODE_API_KEY_ID="${1:-${VERACODE_API_KEY_ID}}"
-export VERACODE_API_KEY_SECRET="${2:-${VERACODE_API_KEY_SECRET}}"
-APP_NAME="${3}"
-
-# Shift past the first 3 required arguments
-shift 3 2>/dev/null || true
+APP_NAME="${1}"
+shift 1 2>/dev/null || true
 
 # Parse optional arguments
 INPUT_FILE=""
