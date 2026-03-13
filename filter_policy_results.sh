@@ -91,6 +91,13 @@ shift 1 2>/dev/null || true
 INPUT_FILE=""
 OUTPUT_FILE=""
 
+# Validate required arguments
+if [ -z "$VERACODE_API_KEY_ID" ] || [ -z "$VERACODE_API_KEY_SECRET" ] || [ -z "$APP_NAME" ]; then
+    echo "Error: vid, vkey, and appname are required"
+    print_usage
+    exit 1
+fi
+
 while [ $# -gt 0 ]; do
     case "$1" in
         --filter) FILTER_TYPE="$2"; shift 2 ;;
@@ -102,13 +109,6 @@ while [ $# -gt 0 ]; do
         *) echo "Unknown argument: $1"; print_usage; exit 1 ;;
     esac
 done
-
-# Validate required arguments
-if [ -z "$VERACODE_API_KEY_ID" ] || [ -z "$VERACODE_API_KEY_SECRET" ] || [ -z "$APP_NAME" ]; then
-    echo "Error: vid, vkey, and appname are required"
-    print_usage
-    exit 1
-fi
 
 # Validate file args
 if [ -n "$INPUT_FILE" ] && [ -z "$OUTPUT_FILE" ]; then

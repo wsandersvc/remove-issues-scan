@@ -1,7 +1,5 @@
 #!/bin/bash
 
-# TODO: Not working for all cases.
-
 # Enhanced Pipeline Results Filter Script
 # Mimics the behavior of pipeline-results-service.ts
 #
@@ -19,6 +17,7 @@ set -e
 
 DEFAULT_LINE_NUMBER_SLOP=3
 DEFAULT_INPUT_FILE="results.json"
+DEFAULT_OUTPUT_FILE="filtered-results.json"
 DEFAULT_FILTER="all_results"
 DEBUG_MODE=false
 FAIL_ON_POLICY=false
@@ -38,18 +37,16 @@ debug_log() {
 
 print_usage() {
     cat << EOF
-Usage: $0 <vid> <vkey> <appname> [options]
+Usage: $0 <appname> [options]
 
 Required arguments:
-  vid                              Veracode API ID
-  vkey                             Veracode API Key
   appname                          Veracode application name
 
 Optional arguments:
   --line-number-slop <n>           Line number slop for matching (default: 3)
   --filter <type>                  Filter type (default: "all_results")
   --input-file <file>              Input pipeline results file (default: "results.json")
-  --output-file <file>             Output file (default: overwrites input file)
+  --output-file <file>             Output file (default: "filtered-results.json")
   --fail-on-policy                 Exit with error code if policy violations found
   --debug                          Enable debug logging
 
@@ -62,18 +59,21 @@ Available filter options:
   new_policy_violations            New policy violations only
 
 Examples:
-  $0 "\$VID" "\$VKEY" "MyApp" --filter unmitigated_results --input-file results.json
-  $0 "\$VID" "\$VKEY" "MyApp" --filter policy_violations --debug
-  $0 "\$VID" "\$VKEY" "MyApp" --line-number-slop 5 --fail-on-policy
+  $0 "MyApp" --filter unmitigated_results --input-file results.json
+  $0 "MyApp" --filter policy_violations --debug
+  $0 "MyApp" --line-number-slop 5 --fail-on-policy
 
+Environment Variables:
+  VERACODE_API_KEY_ID              <vid>
+  VERACODE_API_KEY_SECRET          <vkey>
 EOF
 }
 
 print_results() {    
     echo "=============================================="
-    echo "Pipeline findings: $1"
-    echo "Mitigated findings: $2"
-    echo "Filtered pipeline findings: $3"
+    echo "Total findings: $1"
+    echo "Removed findings: $2"
+    echo "Filtered findings: $3"
     echo "=============================================="
 }
 
@@ -86,17 +86,19 @@ if [ $# -eq 0 ]; then
     exit 1
 fi
 
-# Required arguments
-export VERACODE_API_KEY_ID="${1:-${VERACODE_API_KEY_ID}}"
-export VERACODE_API_KEY_SECRET="${2:-${VERACODE_API_KEY_SECRET}}"
-APP_NAME="${3}"
-
-# Shift past the first 3 required arguments
-shift 3 2>/dev/null || true
+APP_NAME="${1}"
+shift 1 2>/dev/null || true
 
 # Parse optional arguments
 INPUT_FILE="$DEFAULT_INPUT_FILE"
-OUTPUT_FILE=""
+OUTPUT_FILE="$DEFAULT_OUTPUT_FILE"
+
+# Validate required arguments
+if [ -z "$VERACODE_API_KEY_ID" ] || [ -z "$VERACODE_API_KEY_SECRET" ] || [ -z "$APP_NAME" ]; then
+    echo "Error: vid, vkey, and appname are required"
+    print_usage
+    exit 1
+fi
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -111,22 +113,15 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-# Validate required arguments
-if [ -z "$VERACODE_API_KEY_ID" ] || [ -z "$VERACODE_API_KEY_SECRET" ] || [ -z "$APP_NAME" ]; then
-    echo "Error: vid, vkey, and appname are required"
-    print_usage
+# Validate input file exists
+if [ ! -f "$INPUT_FILE" ]; then
+    echo "Error: Input file '$INPUT_FILE' not found"
     exit 1
 fi
 
 # Set output file to input file if not specified (overwrite mode)
 if [ -z "$OUTPUT_FILE" ]; then
     OUTPUT_FILE="$INPUT_FILE"
-fi
-
-# Validate input file exists
-if [ ! -f "$INPUT_FILE" ]; then
-    echo "Error: Input file '$INPUT_FILE' not found"
-    exit 1
 fi
 
 #############################################
@@ -172,8 +167,7 @@ debug_log "Scan ID: $(jq -r '.scan_id // "N/A"' "$INPUT_FILE")"
 # For 'all_results' and 'policy_violations', we don't need to fetch from Veracode
 # because we're not filtering out mitigated findings
 if [ "$PIPELINE_FINDINGS_COUNT" -eq 0 ] || \
-   [ "$FILTER_TYPE" = "all_results" ] || \
-   [ "$FILTER_TYPE" = "policy_violations" ]; then
+   [ "$FILTER_TYPE" = "all_results" ]; then
     
     debug_log "========================================"
     debug_log "Skipping Veracode API calls - early exit condition met"
@@ -182,10 +176,11 @@ if [ "$PIPELINE_FINDINGS_COUNT" -eq 0 ] || \
     debug_log "  - Filter type: $FILTER_TYPE"
     debug_log ""
     debug_log "NOTE: To fetch and filter against Veracode platform findings, use:"
+    debug_log "  - policy_violations"
     debug_log "  - unmitigated_results"
     debug_log "  - unmitigated_policy_violations"
-    debug_log "  - new_findings"
-    debug_log "  - new_policy_violations"
+    # debug_log "  - new_findings"
+    # debug_log "  - new_policy_violations"
     debug_log "========================================"
     
     # Copy input to output
@@ -252,88 +247,125 @@ debug_log "Application profile: $(jq -r '._embedded.applications[0].profile.name
 # Fetch Policy Findings
 #############################################
 
-echo "Fetching policy findings..."
-debug_log "Calling: GET https://api.veracode.com/appsec/v2/applications/${GUID}/findings?scan_type=STATIC&size=500"
+# Fetch from API
+echo "Fetching findings from Veracode API..."
 
-FINDINGS_OUTPUT_FILE="$TEMP_DIR/policy_findings.json"
-FINDINGS_PAGE_0="$TEMP_DIR/findings_p0.json"
+# Fetch findings with pagination
+FINDINGS_FILE="$TEMP_DIR/findings.json"
+PAGE=0
 
 # Fetch first page
-if ! http --auth-type veracode_hmac GET "https://api.veracode.com/appsec/v2/applications/${GUID}/findings?scan_type=STATIC&size=500" > "$FINDINGS_PAGE_0" 2>/dev/null; then
-    echo "Error: Failed to fetch findings from Veracode API"
-    echo "Copying pipeline results without filtering."
+debug_log "Fetching page 0..."
+http --auth-type veracode_hmac GET \
+    "https://api.veracode.com/appsec/v2/applications/${GUID}/findings?scan_type=STATIC&page=${PAGE}" \
+    > "$TEMP_DIR/page_${PAGE}.json" 2>/dev/null || {
+    echo "Error: Failed to fetch findings"
     cp "$INPUT_FILE" "$OUTPUT_FILE"
     print_results "$PIPELINE_FINDINGS_COUNT" 0 "$PIPELINE_FINDINGS_COUNT"
     exit 0
-fi
+}
 
-TOTAL_PAGES=$(jq -r '.page.total_pages // 1' "$FINDINGS_PAGE_0")
-TOTAL_ELEMENTS=$(jq -r '.page.total_elements // 0' "$FINDINGS_PAGE_0")
+TOTAL_PAGES=$(jq -r '.page.total_pages // 1' "$TEMP_DIR/page_0.json")
+TOTAL_ELEMENTS=$(jq -r '.page.total_elements // 0' "$TEMP_DIR/page_0.json")
+echo "Fetched page 1 of ${TOTAL_PAGES} (${TOTAL_ELEMENTS} total findings)"
 
-debug_log "Retrieved ${TOTAL_ELEMENTS} policy findings (${TOTAL_PAGES} pages)"
-
-# If only one page, we're done
-if [ "$TOTAL_PAGES" -eq 1 ]; then
-    mv "$FINDINGS_PAGE_0" "$FINDINGS_OUTPUT_FILE"
-else
-    debug_log "Fetching additional pages..."
-    
-    # Fetch remaining pages
-    for ((i=1; i<TOTAL_PAGES; i++)); do
-        debug_log "Fetching page $i..."
-        FINDINGS_TMP="$TEMP_DIR/findings_tmp.json"
-        FINDINGS_PREV="$TEMP_DIR/findings_p$((i-1)).json"
-        FINDINGS_CURRENT="$TEMP_DIR/findings_p${i}.json"
-        
-        http --auth-type veracode_hmac GET "https://api.veracode.com/appsec/v2/applications/${GUID}/findings?scan_type=STATIC&size=500&page=$i" > "$FINDINGS_TMP" 2>/dev/null
-        
-        debug_log "Merging page $((i-1)) into page $i"
-        jq -s '.[0] as $f1 | .[1] as $f2 | ($f1 + $f2) | ._embedded.findings = ($f1._embedded.findings + $f2._embedded.findings)' \
-            "$FINDINGS_PREV" "$FINDINGS_TMP" > "$FINDINGS_CURRENT"
+# Fetch remaining pages
+if [ "$TOTAL_PAGES" -gt 1 ]; then
+    for PAGE in $(seq 1 $((TOTAL_PAGES-1))); do
+        echo "Fetching page $((PAGE+1)) of ${TOTAL_PAGES}..."
+        http --auth-type veracode_hmac GET \
+            "https://api.veracode.com/appsec/v2/applications/${GUID}/findings?scan_type=STATIC&page=${PAGE}" \
+            > "$TEMP_DIR/page_${PAGE}.json" 2>/dev/null || {
+            echo "Warning: Failed to fetch page $PAGE"
+            break
+        }
     done
     
-    # Rename final output
-    mv "$TEMP_DIR/findings_p$((TOTAL_PAGES-1)).json" "$FINDINGS_OUTPUT_FILE"
+    # Merge all pages
+    debug_log "Merging ${TOTAL_PAGES} pages..."
+    jq -s 'reduce .[] as $page ({"_embedded": {"findings": []}, "_links": .[0]._links, "page": .[0].page}; 
+        ._embedded.findings += $page._embedded.findings)' \
+        "$TEMP_DIR"/page_*.json > "$FINDINGS_FILE"
+else
+    mv "$TEMP_DIR/page_0.json" "$FINDINGS_FILE"
 fi
 
-POLICY_FINDINGS_COUNT=$(jq '._embedded.findings | length' "$FINDINGS_OUTPUT_FILE")
+echo "Successfully fetched all findings"
+
+POLICY_FINDINGS_COUNT=$(jq '._embedded.findings | length' "$FINDINGS_FILE")
 debug_log "Total policy findings fetched: ${POLICY_FINDINGS_COUNT}"
 
 if [ "$DEBUG_MODE" = true ]; then
     debug_log "Sample policy findings:"
-    jq -r '._embedded.findings[0:3][] | "  issue_id=\(.issue_id), file=\(.finding_details.file_path), line=\(.finding_details.file_line_number), cwe=\(.finding_details.cwe.id), status=\(.finding_status.status), resolution=\(.finding_status.resolution)"' "$FINDINGS_OUTPUT_FILE" 2>/dev/null || true
+    jq -r '._embedded.findings[0:3][] | "  issue_id=\(.issue_id), file=\(.finding_details.file_path), line=\(.finding_details.file_line_number), cwe=\(.finding_details.cwe.id), status=\(.finding_status.status), resolution=\(.finding_status.resolution)"' "$FINDINGS_FILE" 2>/dev/null || true
 fi
 
 #############################################
 # Filter Policy Findings Based on Filter Type
-#############################################
+#########################################
 
 EXCLUSION_CRITERIA_FILE="$TEMP_DIR/exclusion_criteria.txt"
 
 debug_log "========================================"
 debug_log "Filtering policy findings based on filter type: $FILTER_TYPE"
 
-# Determine which policy findings to exclude from pipeline results
-if [[ "$FILTER_TYPE" == *"mitigated"* ]]; then
-    # For unmitigated filters, exclude only mitigated findings
-    debug_log "Extracting mitigated findings (CLOSED + APPROVED + MITIGATED/POTENTIAL_FALSE_POSITIVE)"
-    
-    jq -r '._embedded.findings[] | select(
-        .finding_status.status == "CLOSED" and
-        .finding_status.resolution_status == "APPROVED" and
-        (.finding_status.resolution == "MITIGATED" or .finding_status.resolution == "POTENTIAL_FALSE_POSITIVE") and
-        .finding_details.file_path != null
-    ) | "\(.finding_details.file_path)|\(.finding_details.cwe.id)|\(.finding_details.file_line_number)"' \
-        "$FINDINGS_OUTPUT_FILE" > "$EXCLUSION_CRITERIA_FILE"
-else
-    # For new_findings or new_policy_violations, exclude ALL policy findings
-    debug_log "Extracting all policy findings for exclusion"
-    
-    jq -r '._embedded.findings[] | select(
-        .finding_details.file_path != null
-    ) | "\(.finding_details.file_path)|\(.finding_details.cwe.id)|\(.finding_details.file_line_number)"' \
-        "$FINDINGS_OUTPUT_FILE" > "$EXCLUSION_CRITERIA_FILE"
-fi
+case "$FILTER_TYPE" in
+    policy_violations)
+        debug_log "Policy violations"
+        jq -r '._embedded.findings[] | select(
+            .violates_policy == true and 
+            .finding_details.file_path != null
+        ) | "\(.finding_details.file_path)|\(.finding_details.cwe.id)|\(.finding_details.file_line_number)"' \
+            "$FINDINGS_FILE" > "$EXCLUSION_CRITERIA_FILE"
+        ;;
+    unmitigated_results)
+        debug_log "Unmitigated findings"
+        jq -r '._embedded.findings[] | select(
+            .finding_status.status != "CLOSED" or
+            .finding_status.resolution_status != "APPROVED" or
+            (.finding_status.resolution != "MITIGATED" and
+             .finding_status.resolution != "POTENTIAL_FALSE_POSITIVE") and 
+             .finding_details.file_path != null
+        ) | "\(.finding_details.file_path)|\(.finding_details.cwe.id)|\(.finding_details.file_line_number)"' \
+            "$FINDINGS_FILE" > "$EXCLUSION_CRITERIA_FILE"
+        ;;
+    unmitigated_policy_violations)
+        debug_log "Unmitigated policy violations"
+        jq -r '._embedded.findings[] | select(
+            .violates_policy == true and
+            (
+                .finding_status.status != "CLOSED" or
+                .finding_status.resolution_status != "APPROVED" or
+                (.finding_status.resolution != "MITIGATED" and
+                .finding_status.resolution != "POTENTIAL_FALSE_POSITIVE")
+            ) and 
+            .finding_details.file_path != null
+        ) | "\(.finding_details.file_path)|\(.finding_details.cwe.id)|\(.finding_details.file_line_number)"' \
+            "$FINDINGS_FILE" > "$EXCLUSION_CRITERIA_FILE"
+        ;;
+    new_findings)
+        debug_log "New findings"
+        jq -r '._embedded.findings[] | select(
+            .finding_status.new == true and
+            .finding_details.file_path != null
+        ) | "\(.finding_details.file_path)|\(.finding_details.cwe.id)|\(.finding_details.file_line_number)"' \
+            "$FINDINGS_FILE" > "$EXCLUSION_CRITERIA_FILE"
+        ;;
+    new_policy_violations)
+        debug_log "New policy violations"
+        jq -r '._embedded.findings[] | select(
+            .finding_status.new == true and 
+            .violates_policy == true and 
+            .finding_details.file_path != null
+        ) | "\(.finding_details.file_path)|\(.finding_details.cwe.id)|\(.finding_details.file_line_number)"' \
+            "$FINDINGS_FILE" > "$EXCLUSION_CRITERIA_FILE"
+        ;;
+    *)
+        echo "Error: Unknown filter type '$FILTER_TYPE'"
+        print_usage
+        exit 1
+        ;;
+esac
 
 EXCLUSION_COUNT=$(wc -l < "$EXCLUSION_CRITERIA_FILE" | tr -d ' ')
 echo "Exclusion criteria count: ${EXCLUSION_COUNT}"
@@ -390,7 +422,7 @@ cat > "$FILTER_SCRIPT" << 'EOF'
     )) as $should_exclude |
     
     # Keep findings that should NOT be excluded
-    select($should_exclude | not)
+    select($should_exclude)
 )
 EOF
 
@@ -398,18 +430,24 @@ debug_log "Applying filter with jq..."
 
 EXCLUSION_JSON=$(cat "$EXCLUSION_CRITERIA_FILE" | jq -R -s 'split("\n") | map(select(length > 0))')
 
+###############################################################################
+# Count and Write Results
+###############################################################################
+
 jq --argjson exclusions "$EXCLUSION_JSON" \
    --argjson slop "$LINE_NUMBER_SLOP" \
    -f "$FILTER_SCRIPT" \
    "$INPUT_FILE" > "$OUTPUT_FILE"
 
-FILTERED_COUNT=$(jq '.findings | length' "$OUTPUT_FILE")
-REMOVED_COUNT=$((PIPELINE_FINDINGS_COUNT - FILTERED_COUNT))
+FILTERED_COUNT=$(jq '.findings | length' "$OUTPUT_FILE" 2>/dev/null || echo "0")
+REMOVED_COUNT=$((PIPELINE_FINDINGS_COUNT - EXCLUSION_COUNT))
 
+debug_log "Filtered: ${FILTERED_COUNT}, Removed: ${REMOVED_COUNT}"
+
+echo ""
 echo "Results written to $OUTPUT_FILE"
+print_results "$PIPELINE_FINDINGS_COUNT" "$REMOVED_COUNT" "$FILTERED_COUNT"
 debug_log "Output file size: $(wc -c < "$OUTPUT_FILE" | tr -d ' ') bytes"
-
-print_results "$PIPELINE_FINDINGS_COUNT" "$EXCLUSION_COUNT" "$FILTERED_COUNT"
 
 #############################################
 # Exit Based on Results
